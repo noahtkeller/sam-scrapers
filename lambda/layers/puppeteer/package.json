@@ -1,0 +1,10 @@
+{
+  "name": "puppeteer-layer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "chrome-aws-lambda": "^10.1.0",
+    "puppeteer-core": "^13.5.1"
+  }
+}

@@ -1,0 +1,262 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Timeout: 30
+
+Resources:
+  MugshotsBucket:
+    Type: AWS::S3::Bucket
+  JailSearchFnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowJailSearchFnPutItemDynamo
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !GetAtt BookingTable.Arn
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+        - PolicyName: AllowJailSearchFnPutObjectS3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !Sub ${MugshotsBucket.Arn}/*
+                Action:
+                  - s3:PutObject
+  JailSearchSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaInvokeFunction
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - !GetAtt JailSearchFn.Arn
+                  - !GetAtt ScheduledJailSearchFn.Arn
+                Action:
+                  - lambda:InvokeFunction
+  JailSearchFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt JailSearchFnRole.Arn
+      Environment:
+        Variables:
+          TableName: !Ref BookingTable
+          Bucket: !Ref MugshotsBucket
+      CodeUri: lambda/functions/jail-search/
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+  ScheduledJailSearchFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt JailSearchFnRole.Arn
+      Environment:
+        Variables:
+          TableName: !Ref BookingTable
+      CodeUri: lambda/functions/jail-search/
+      Handler: index.scheduler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+  SQLDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+
+  BookingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: facility
+          AttributeType: S
+        - AttributeName: rid
+          AttributeType: N
+      KeySchema:
+        - AttributeName: facility
+          KeyType: HASH
+        - AttributeName: rid
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  MarionCCTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: courtType
+          AttributeType: S
+        - AttributeName: caseNumber
+          AttributeType: S
+      KeySchema:
+        - AttributeName: courtType
+          KeyType: HASH
+        - AttributeName: caseNumber
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  JailSearchSM:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Role: !GetAtt JailSearchSMRole.Arn
+#      Events:
+#        ScheduledEvent:
+#          Type: Schedule
+#          Properties:
+#            Description: Cron for JailSearch scheduled job
+#            Schedule: rate(1 minute)
+      Definition:
+        StartAt: GetLastRID
+        States:
+          GetLastRID:
+            Type: Task
+            Resource: !GetAtt ScheduledJailSearchFn.Arn
+            Next: DoLookup
+          DoLookup:
+            Type: Task
+            Resource: !GetAtt JailSearchFn.Arn
+            End: true
+  PuppeteerLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: puppeteer-layer
+      Description: Puppeteer layer for scrapers
+      ContentUri: lambda/layers/puppeteer/
+      CompatibleRuntimes:
+        - nodejs14.x
+  DocketBucket:
+    Type: AWS::S3::Bucket
+  CivitekFnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowCivitekFnPutItemDynamo
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !GetAtt MarionCCTable.Arn
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+        - PolicyName: AllowCivitekFnPutObjectS3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !Sub ${MugshotsBucket.Arn}/*
+                Action:
+                  - s3:PutObject
+  CivitekFn:
+    Type: AWS::Serverless::Function
+    Properties:
+#      Layers:
+#        - !GetAtt PuppeteerLayer.Arn
+      Role: !GetAtt CivitekFnRole.Arn
+      Environment:
+        Variables:
+          TableName: !Ref MarionCCTable
+          Bucket: !Ref DocketBucket
+      CodeUri: lambda/functions/civitek/
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+  MarionNewVisionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: type
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: N
+      KeySchema:
+        - AttributeName: type
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  MarionNewVisionBucket:
+    Type: AWS::S3::Bucket
+  MarionNewVisionFnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowMarionNewVisionFnPutItemDynamo
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !GetAtt MarionNewVisionTable.Arn
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+        - PolicyName: AllowMarionNewVisionFnPutObjectS3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource: !Sub ${MarionNewVisionBucket.Arn}/*
+                Action:
+                  - s3:PutObject
+  MarionNewVisionFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt MarionNewVisionFnRole.Arn
+      Environment:
+        Variables:
+          TableName: !Ref MarionNewVisionTable
+          Bucket: !Ref MarionNewVisionBucket
+      CodeUri: lambda/functions/new-vision/
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
